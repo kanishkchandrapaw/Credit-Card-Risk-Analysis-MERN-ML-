@@ -17,12 +17,20 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // CORS middleware
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://credit-card-risk-analysis-mern-hndruipsc.vercel.app',
+  'https://credit-card-risk-analysis-mern-ml.vercel.app',
+  // Add any other domain shown in Vercel “Domains” or from deployment URLs
+];
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: allowedOrigins,
     credentials: true,
   })
 );
+
 
 // Routes
 app.use('/api/auth', require('./routes/authRoutes'));
