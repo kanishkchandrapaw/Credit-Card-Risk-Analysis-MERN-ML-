@@ -6,7 +6,19 @@ import os
 from typing import List
 
 app = Flask(__name__)
-CORS(app)
+
+# === CORS configuration ===
+# Allow only your Vercel frontend origin for safety.
+FRONTEND_ORIGIN = "https://credit-card-risk-analysis-mern-ml.vercel.app"
+
+CORS(
+    app,
+    origins=[FRONTEND_ORIGIN],
+    methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+    supports_credentials=False,
+    expose_headers=["Content-Type"],
+)
 
 # Paths
 BASE_DIR = os.path.dirname(__file__)
@@ -83,7 +95,6 @@ def predict():
 
         # Predict
         pred = model.predict(X_scaled)
-        # pred might be array([0]) or array([1])
         prediction = int(pred[0])
 
         # Probabilities: prefer predict_proba, fallback to decision_function or return 0/1
@@ -92,17 +103,14 @@ def predict():
 
         if hasattr(model, "predict_proba"):
             probs = model.predict_proba(X_scaled)[0]
-            # many binaries: class 0 -> no default, class 1 -> default
             no_default_prob = float(probs[0])
             default_prob = float(probs[1])
         elif hasattr(model, "decision_function"):
-            # Scale the decision output into a pseudo-probability (sigmoid)
             score = model.decision_function(X_scaled)[0]
             prob = 1.0 / (1.0 + np.exp(-score))
             default_prob = float(prob)
             no_default_prob = float(1 - prob)
         else:
-            # No probability available; use prediction as 0/1
             default_prob = float(prediction)
             no_default_prob = float(1 - prediction)
 
@@ -115,7 +123,6 @@ def predict():
             "risk_level": risk_level
         }
 
-        # Helpful debug log (Render logs will capture this)
         app.logger.info("Prediction request processed: %s", response)
         return jsonify(response), 200
 
