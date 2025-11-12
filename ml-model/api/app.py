@@ -3,88 +3,129 @@ from flask_cors import CORS
 import joblib
 import numpy as np
 import os
+from typing import List
 
 app = Flask(__name__)
 CORS(app)
 
-# Load the trained model and scaler from the same directory as app.py
+# Paths
 BASE_DIR = os.path.dirname(__file__)
-MODEL_PATH = os.path.join(BASE_DIR, 'credit_model.pkl')
-SCALER_PATH = os.path.join(BASE_DIR, 'scaler.pkl')
+MODEL_PATH = os.path.join(BASE_DIR, "credit_model.pkl")
+SCALER_PATH = os.path.join(BASE_DIR, "scaler.pkl")
 
+model = None
+scaler = None
+
+# Load model and scaler
 try:
     model = joblib.load(MODEL_PATH)
-    scaler = joblib.load(SCALER_PATH)
-    print("✅ Model and scaler loaded successfully!")
+    app.logger.info("✅ Model loaded from: %s", MODEL_PATH)
 except Exception as e:
-    print(f"❌ Error loading model: {e}")
+    app.logger.error("❌ Error loading model: %s", e)
 
-@app.route('/health', methods=['GET'])
+try:
+    if os.path.exists(SCALER_PATH):
+        scaler = joblib.load(SCALER_PATH)
+        app.logger.info("✅ Scaler loaded from: %s", SCALER_PATH)
+    else:
+        app.logger.warning("⚠️ Scaler file not found, continuing without scaler.")
+except Exception as e:
+    app.logger.error("❌ Error loading scaler: %s", e)
+    scaler = None
+
+# Exact feature order expected by your model (23 features)
+EXPECTED_FEATURES: List[str] = [
+    "LIMIT_BAL", "SEX", "EDUCATION", "MARRIAGE", "AGE",
+    "PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6",
+    "BILL_AMT1", "BILL_AMT2", "BILL_AMT3", "BILL_AMT4", "BILL_AMT5", "BILL_AMT6",
+    "PAY_AMT1", "PAY_AMT2", "PAY_AMT3", "PAY_AMT4", "PAY_AMT5", "PAY_AMT6"
+]
+
+@app.route("/health", methods=["GET"])
 def health():
-    return jsonify({'status': 'healthy', 'message': 'ML API is running'})
+    status = {
+        "status": "healthy" if model is not None else "model_not_loaded",
+        "model_loaded": model is not None,
+        "scaler_loaded": scaler is not None
+    }
+    return jsonify(status), 200
 
-@app.route('/predict', methods=['POST'])
+@app.route("/predict", methods=["POST"])
 def predict():
+    if model is None:
+        return jsonify({"error": "Model not loaded on server"}), 503
+
+    if not request.is_json:
+        return jsonify({"error": "Content-Type must be application/json"}), 400
+
+    data = request.get_json()
+
+    # Check required fields
+    missing = [f for f in EXPECTED_FEATURES if f not in data]
+    if missing:
+        return jsonify({"error": "missing_fields", "details": missing}), 400
+
     try:
-        data = request.json
+        # Build features in the correct order
+        features = []
+        for key in EXPECTED_FEATURES:
+            val = data[key]
+            # convert strings/numbers to float (raises if not convertible)
+            features.append(float(val))
 
-        # Use all 23 features in the exact same order as model training
-        features = np.array([[
-            float(data['LIMIT_BAL']),
-            float(data['SEX']),
-            float(data['EDUCATION']),
-            float(data['MARRIAGE']),
-            float(data['AGE']),
-            float(data['PAY_0']),
-            float(data['PAY_2']),
-            float(data['PAY_3']),
-            float(data['PAY_4']),
-            float(data['PAY_5']),
-            float(data['PAY_6']),
-            float(data['BILL_AMT1']),
-            float(data['BILL_AMT2']),
-            float(data['BILL_AMT3']),
-            float(data['BILL_AMT4']),
-            float(data['BILL_AMT5']),
-            float(data['BILL_AMT6']),
-            float(data['PAY_AMT1']),
-            float(data['PAY_AMT2']),
-            float(data['PAY_AMT3']),
-            float(data['PAY_AMT4']),
-            float(data['PAY_AMT5']),
-            float(data['PAY_AMT6'])
-        ]])
+        X = np.array([features])  # shape (1, 23)
 
-        # Scale features
-        features_scaled = scaler.transform(features)
+        # Scale if scaler present
+        if scaler is not None:
+            X_scaled = scaler.transform(X)
+        else:
+            X_scaled = X
 
-        # Model prediction
-        prediction = model.predict(features_scaled)[0]
-        probability = model.predict_proba(features_scaled)[0]
+        # Predict
+        pred = model.predict(X_scaled)
+        # pred might be array([0]) or array([1])
+        prediction = int(pred[0])
 
-        # Debug print
-        print({
-            'Received': data,
-            'Parsed Features': features.tolist(),
-            'Prediction': int(prediction),
-            'Default Prob': float(probability[1]),
-            'Safe Prob': float(probability[0])
-        })
+        # Probabilities: prefer predict_proba, fallback to decision_function or return 0/1
+        default_prob = None
+        no_default_prob = None
 
-        # Return result
-        return jsonify({
-            'prediction': int(prediction),
-            'default_probability': float(probability[1]),
-            'no_default_probability': float(probability[0]),
-            'risk_level': 'High' if probability[1] > 0.5 else 'Low'
-        })
+        if hasattr(model, "predict_proba"):
+            probs = model.predict_proba(X_scaled)[0]
+            # many binaries: class 0 -> no default, class 1 -> default
+            no_default_prob = float(probs[0])
+            default_prob = float(probs[1])
+        elif hasattr(model, "decision_function"):
+            # Scale the decision output into a pseudo-probability (sigmoid)
+            score = model.decision_function(X_scaled)[0]
+            prob = 1.0 / (1.0 + np.exp(-score))
+            default_prob = float(prob)
+            no_default_prob = float(1 - prob)
+        else:
+            # No probability available; use prediction as 0/1
+            default_prob = float(prediction)
+            no_default_prob = float(1 - prediction)
+
+        risk_level = "High" if default_prob > 0.5 else "Low"
+
+        response = {
+            "prediction": prediction,
+            "default_probability": default_prob,
+            "no_default_probability": no_default_prob,
+            "risk_level": risk_level
+        }
+
+        # Helpful debug log (Render logs will capture this)
+        app.logger.info("Prediction request processed: %s", response)
+        return jsonify(response), 200
 
     except Exception as e:
-        print(f"Error in prediction: {e}")
-        return jsonify({'error': str(e)}), 400
+        app.logger.exception("Error during prediction")
+        return jsonify({"error": "prediction_error", "message": str(e)}), 400
 
-if __name__ == '__main__':
-    print("🚀 Starting ML API Server...")
-    print(f"✅ Model loaded from: {MODEL_PATH}")
-    print(f"✅ Scaler loaded from: {SCALER_PATH}")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+
+if __name__ == "__main__":
+    # Use Render's provided PORT when running locally for consistency.
+    port = int(os.environ.get("PORT", 5000))
+    app.logger.info("🚀 Starting ML API Server on port %s ...", port)
+    app.run(host="0.0.0.0", port=port, debug=False)
