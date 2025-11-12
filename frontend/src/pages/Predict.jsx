@@ -253,7 +253,7 @@ const Predict = () => {
       }
 
       try {
-        const response = await axios.post("http://localhost:5001/predict", payload);
+        const response = await axios.post("https://credit-card-risk-analysis-mern-ml-1.onrender.com/predict", payload);
         navigate("/results", {
           state: { prediction: response.data, formData: payload },
         });
