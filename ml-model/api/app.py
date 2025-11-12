@@ -7,10 +7,10 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-# Load the trained model and scaler
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, 'models', 'credit_model.pkl')
-SCALER_PATH = os.path.join(BASE_DIR, 'models', 'scaler.pkl')
+# Load the trained model and scaler from the same directory as app.py
+BASE_DIR = os.path.dirname(__file__)
+MODEL_PATH = os.path.join(BASE_DIR, 'credit_model.pkl')
+SCALER_PATH = os.path.join(BASE_DIR, 'scaler.pkl')
 
 try:
     model = joblib.load(MODEL_PATH)
@@ -87,4 +87,4 @@ if __name__ == '__main__':
     print("🚀 Starting ML API Server...")
     print(f"✅ Model loaded from: {MODEL_PATH}")
     print(f"✅ Scaler loaded from: {SCALER_PATH}")
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False)
